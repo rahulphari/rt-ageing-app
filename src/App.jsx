@@ -31,7 +31,7 @@ const parseCSV = (text) => {
   let currentRow = [];
   let currentVal = '';
   let inQuote = false;
-  
+   
   const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   for (let i = 0; i < cleanText.length; i++) {
@@ -69,7 +69,7 @@ const parseCSV = (text) => {
   }
 
   if (rows.length === 0) return [];
-  
+   
   const headers = rows[0].map(h => h.replace(/^['"]|['"]$/g, '').trim());
   const data = rows.slice(1).map(row => {
     if (row.length === 1 && row[0] === '') return null;
@@ -101,16 +101,16 @@ const googleService = {
     try {
       const separator = url.includes('?') ? '&' : '?';
       const noCacheUrl = `${url}${separator}t=${new Date().getTime()}`;
-      
+       
       const response = await fetch(noCacheUrl, {
         method: 'GET',
         redirect: 'follow'
       });
-      
+       
       if (!response.ok) {
         throw new Error(`Server error: ${response.status}`);
       }
-      
+       
       const json = await response.json();
       return json;
     } catch (e) {
@@ -205,7 +205,7 @@ export default function App() {
   const [data, setData] = useState({ active: [], history: [] });
   const [loading, setLoading] = useState(false);
   const [apiUrl, setApiUrl] = useState(INITIAL_API_URL);
-  
+   
   // UI States
   const [uploadStats, setUploadStats] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -213,7 +213,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState('idle');
   const [dataSource, setDataSource] = useState('local'); 
   const [lastSaved, setLastSaved] = useState(null);
-  
+   
   // Filter States
   const [filters, setFilters] = useState({
     status: 'all',
@@ -221,7 +221,7 @@ export default function App() {
     product: 'all',
     age: 'all'
   });
-  
+   
   // Settings Logic
   const [isSettingsLocked, setIsSettingsLocked] = useState(true);
   const [passkeyInput, setPasskeyInput] = useState('');
@@ -239,7 +239,7 @@ export default function App() {
       const result = apiUrl 
         ? await googleService.getData(apiUrl) 
         : await localService.getData();
-      
+       
       setData({
         active: Array.isArray(result?.active) ? result.active : [],
         history: Array.isArray(result?.history) ? result.history : []
@@ -253,9 +253,9 @@ export default function App() {
       const msg = error.message.includes("Access Denied") 
         ? "Access Denied: Please check your Google Script deployment settings (Who has access: Anyone)." 
         : "Could not fetch data from Cloud. Using local backup.";
-      
+       
       setErrorMsg(msg);
-      
+       
       const localData = await localService.getData();
       setData(localData);
       setSyncStatus('error');
@@ -273,7 +273,7 @@ export default function App() {
         const payloadStr = JSON.stringify(newData);
         const sizeKb = (payloadStr.length / 1024).toFixed(1);
         console.log(`Saving ${sizeKb}KB to backend...`);
-        
+         
         await googleService.saveData(apiUrl, newData);
       } else {
         await localService.saveData(newData);
@@ -290,7 +290,7 @@ export default function App() {
   const forceSave = async () => {
     if (!apiUrl) return alert("No API URL configured");
     if (!window.confirm("This will force-overwrite the cloud data with your current view. Continue?")) return;
-    
+     
     setLoading(true);
     await saveDataToBackend(data);
     setLoading(false);
@@ -318,7 +318,7 @@ export default function App() {
     );
 
     const incomingDataMap = new Map();
-    
+     
     facilityRows.forEach(row => {
       const rawWbn = row['wbn'] || 'Unknown';
       const cleanId = cleanCsvWbn(rawWbn);
@@ -354,7 +354,7 @@ export default function App() {
         newActiveList.push({
           ...incoming,
           jarvis_ticket: existingItem.jarvis_ticket, 
-          user_note: existingItem.user_note || '',   
+          user_note: existingItem.user_note || '',    
           status: 'Pending'
         });
         incomingDataMap.delete(existingItem.id);
@@ -402,7 +402,7 @@ export default function App() {
     lines.forEach(line => {
       const cleanLine = line.replace(/['"]/g, '').trim();
       const parts = cleanLine.split(/\s+/);
-      
+       
       if (parts.length >= 2) {
         const rawWbn = parts[0].trim();
         const ticket = parts[1].trim();
@@ -418,7 +418,7 @@ export default function App() {
     }
 
     let updateCount = 0;
-    
+     
     const newActiveList = data.active.map(item => {
       const normalizedStoredWbn = normalizeWbn(item.wbn);
       if (updatesMap.has(normalizedStoredWbn)) {
@@ -467,7 +467,7 @@ export default function App() {
         item.wbn.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.cl.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.jarvis_ticket && item.jarvis_ticket.toLowerCase().includes(searchTerm.toLowerCase()));
-      
+       
       if (!matchesSearch) return false;
 
       if (filters.client !== 'all' && item.cl !== filters.client) return false;
@@ -498,7 +498,7 @@ export default function App() {
   // --- DOWNLOAD REPORT ---
   const handleDownloadReport = () => {
     const reportData = activeTab === 'active' ? filteredActive : data.history;
-    
+     
     // Headers matching the schema
     const headers = [
       "WBN", "Bag ID", "Client", "Product", 
@@ -549,7 +549,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
-      
+       
       {/* HEADER */}
       <header className="bg-slate-900 text-white p-6 shadow-lg sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
@@ -564,7 +564,7 @@ export default function App() {
               {dataSource === 'cloud' && <span className="ml-2 text-xs bg-green-900 text-green-200 px-2 py-0.5 rounded">Cloud Active</span>}
             </p>
           </div>
-          
+           
           <div className="flex items-center gap-4">
             <div className="flex flex-col items-end">
                <SyncIndicator status={syncStatus} />
@@ -756,7 +756,7 @@ export default function App() {
                         <DataCell main={row.cl} sub={row.pdt} />
                       </td>
                       <td className="px-6 py-4 align-top">
-                         <div className="flex flex-col">
+                          <div className="flex flex-col">
                             <span className={`font-bold text-sm ${parseFloat(row.age_days) >= 15 ? 'text-red-600' : 'text-gray-800'}`}>
                               {row.age_days} Days
                             </span>
@@ -894,12 +894,12 @@ export default function App() {
                       Use this if synchronization seems stuck. It will attempt to force-write the current browser state to the cloud.
                     </p>
                     <div className="flex gap-4">
-                       <button 
-                        onClick={forceSave}
-                        className="bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
-                      >
-                        Force Save to Cloud
-                      </button>
+                        <button 
+                         onClick={forceSave}
+                         className="bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
+                       >
+                         Force Save to Cloud
+                       </button>
                     </div>
                   </div>
 
