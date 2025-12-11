@@ -15,14 +15,31 @@ const INITIAL_API_URL = "https://script.google.com/macros/s/AKfycbxdVp1u3awN6rkY
 const SETTINGS_PASSKEY = "1732";
 
 // --- HELPER: DATA NORMALIZATION ---
+// Strict alphanumeric normalization for robust ID generation
 const normalizeWbn = (wbn) => {
   if (!wbn) return '';
   return String(wbn).replace(/[^a-zA-Z0-9]/g, '');
 };
 
+// Legacy helper kept for display purposes if needed, but ID generation now uses normalizeWbn
 const cleanCsvWbn = (wbn) => {
   if (!wbn) return 'Unknown';
   return String(wbn).replace(/^['"=]+/, '').trim();
+};
+
+const getTimeSinceLabel = (dateString) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const today = new Date();
+  
+  // Check if it's the same day
+  const isToday = date.getDate() === today.getDate() &&
+                  date.getMonth() === today.getMonth() &&
+                  date.getFullYear() === today.getFullYear();
+                  
+  if (isToday) return 'Added Today!';
+  
+  return `Since ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 };
 
 // --- HELPER: CUSTOM CSV PARSER ---
@@ -318,14 +335,16 @@ export default function App() {
     );
 
     const incomingDataMap = new Map();
+    const now = new Date().toISOString();
      
     facilityRows.forEach(row => {
       const rawWbn = row['wbn'] || 'Unknown';
-      const cleanId = cleanCsvWbn(rawWbn);
+      // BUG FIX: Use normalizeWbn for strictly consistent IDs (removes hidden spaces/chars)
+      const cleanId = normalizeWbn(rawWbn);
 
       const item = {
         id: cleanId,
-        wbn: cleanId, 
+        wbn: cleanCsvWbn(rawWbn), // Keep visual representation readable
         bagid: row['bagid'] || '-',
         cl: row['cl'] || 'Unknown Client',
         pdt: row['pdt'] || '-',
@@ -334,7 +353,10 @@ export default function App() {
         ntc_name: row['ntc_name'] || 'Unknown NTC',
         rcn: row['rcn'] || '-',
         remark: row['cs_sr'] || '-',
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
+        // Important: firstSeenAt will be set to 'now' here, 
+        // but overwritten by existing data if matched below
+        firstSeenAt: now, 
         jarvis_ticket: '',
         user_note: '', 
         status: 'New' 
@@ -345,21 +367,36 @@ export default function App() {
     const currentActive = [...data.active];
     const newActiveList = [];
     const resolvedList = [];
+    
+    // Helper to track history items that are being "Reopened"
+    const remainingHistory = [];
+    
     let newCount = 0;
     let updatedCount = 0;
 
+    // 1. Process Currently Active Items
     currentActive.forEach(existingItem => {
-      if (incomingDataMap.has(existingItem.id)) {
-        const incoming = incomingDataMap.get(existingItem.id);
+      // Normalize the existing ID as well to ensure match even if format differed slightly
+      const existingIdNormalized = normalizeWbn(existingItem.wbn || existingItem.id);
+
+      // Check against our new normalized map
+      if (incomingDataMap.has(existingIdNormalized)) {
+        const incoming = incomingDataMap.get(existingIdNormalized);
+        
         newActiveList.push({
           ...incoming,
+          // CRITICAL: Preserve persistent fields from the existing matched item
           jarvis_ticket: existingItem.jarvis_ticket, 
           user_note: existingItem.user_note || '',    
+          firstSeenAt: existingItem.firstSeenAt || existingItem.updatedAt || now, 
           status: 'Pending'
         });
-        incomingDataMap.delete(existingItem.id);
+        
+        // Remove from map so we know it was handled
+        incomingDataMap.delete(existingIdNormalized);
         updatedCount++;
       } else {
+        // Item missing from new report -> Resolved
         resolvedList.push({
           ...existingItem,
           resolvedAt: new Date().toISOString(),
@@ -368,6 +405,36 @@ export default function App() {
       }
     });
 
+    // 2. Process Resolved History (Checking for Reopens)
+    // We check if any remaining incoming items (that weren't in Active) exist in History
+    data.history.forEach(historyItem => {
+      const historyIdNormalized = normalizeWbn(historyItem.wbn || historyItem.id);
+
+      if (incomingDataMap.has(historyIdNormalized)) {
+        // FOUND IN HISTORY -> REOPEN
+        const incoming = incomingDataMap.get(historyIdNormalized);
+        
+        newActiveList.push({
+          ...incoming,
+          // RESTORE DATA FROM HISTORY
+          jarvis_ticket: historyItem.jarvis_ticket || '', 
+          user_note: historyItem.user_note || '',
+          // Use original firstSeenAt if available, otherwise keep what we have
+          firstSeenAt: historyItem.firstSeenAt || historyItem.updatedAt || now, 
+          status: 'Pending' // Back to active status
+        });
+
+        // Remove from incoming map
+        incomingDataMap.delete(historyIdNormalized);
+        updatedCount++;
+        // We DO NOT push this to remainingHistory, effectively removing it from Resolved History
+      } else {
+        // Not in incoming, so it stays in history
+        remainingHistory.push(historyItem);
+      }
+    });
+
+    // 3. Process Remaining (Truly New) Items
     incomingDataMap.forEach((item) => {
       newActiveList.push(item);
       newCount++;
@@ -375,7 +442,8 @@ export default function App() {
 
     const newData = {
       active: newActiveList,
-      history: [...resolvedList, ...data.history]
+      // History is: Newly Resolved + Old History (minus reopened ones)
+      history: [...resolvedList, ...remainingHistory]
     };
 
     setData(newData);
@@ -504,7 +572,7 @@ export default function App() {
       "WBN", "Bag ID", "Client", "Product", 
       "Age (Days)", "Age (Hours)", 
       "NTC Name", "RCN", "Remark", 
-      "Jarvis Ticket", "User Note", "Status", "Last Updated"
+      "Jarvis Ticket", "User Note", "Status", "First Seen", "Last Updated"
     ];
 
     const csvContent = [
@@ -522,6 +590,7 @@ export default function App() {
         `"${row.jarvis_ticket || ''}"`,
         `"${(row.user_note || '').replace(/"/g, '""')}"`,
         row.status,
+        row.firstSeenAt || '',
         row.updatedAt || row.resolvedAt
       ].join(','))
     ].join('\n');
@@ -747,7 +816,12 @@ export default function App() {
                   ) : filteredActive.map((row) => (
                     <tr key={row.id} className="hover:bg-gray-50 transition-colors group">
                       <td className="px-6 py-4 align-top">
-                        <StatusBadge ticket={row.jarvis_ticket} />
+                        <div className="flex flex-col gap-1">
+                          <StatusBadge ticket={row.jarvis_ticket} />
+                          <span className="text-[10px] font-medium text-gray-400 pl-1">
+                            {getTimeSinceLabel(row.firstSeenAt)}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-6 py-4 align-top">
                         <DataCell main={row.wbn} sub={`Bag: ${row.bagid}`} />
@@ -931,4 +1005,4 @@ export default function App() {
       </main>
     </div>
   );
-}
+        }
