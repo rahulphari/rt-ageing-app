@@ -4,24 +4,27 @@ import {
   Clock, Search, Database, Save, RefreshCw,
   LayoutDashboard, History as HistoryIcon, X,
   Lock, Unlock, Edit3, Cloud, CloudOff, Filter, Sliders,
-  Download, Activity
+  Download, Activity, FileSpreadsheet, Send
 } from 'lucide-react';
 
 // --- CONFIGURATION & TYPES ---
 
 const FACILITY_FILTER = "Hubli_Budarshingi_H (Karnataka)";
-// UPDATED URL provided by user
+
+// 1. ORIGINAL DATABASE URL (Restored - Keeps your old system working)
 const INITIAL_API_URL = "https://script.google.com/macros/s/AKfycbxdVp1u3awN6rkYMZi-BfXpSwgLdRTZgDoatvyrxgSYmBWbVHiTbvOyGXrdqVQjie_ICQ/exec";
+
+// 2. NEW REPORTING URL (For the clean sync to the new sheet)
+const REPORTING_API_URL = "https://script.google.com/macros/s/AKfycbx1XBfg_OT-OiAbgO_pQ4eh0KLFMogpWdbEsl9B1u4vMOd-GrIQMnFtZOSSxCCd6exhCA/exec";
+
 const SETTINGS_PASSKEY = "1732";
 
 // --- HELPER: DATA NORMALIZATION ---
-// Strict alphanumeric normalization for robust ID generation
 const normalizeWbn = (wbn) => {
   if (!wbn) return '';
   return String(wbn).replace(/[^a-zA-Z0-9]/g, '');
 };
 
-// Legacy helper kept for display purposes if needed, but ID generation now uses normalizeWbn
 const cleanCsvWbn = (wbn) => {
   if (!wbn) return 'Unknown';
   return String(wbn).replace(/^['"=]+/, '').trim();
@@ -32,7 +35,6 @@ const getTimeSinceLabel = (dateString) => {
   const date = new Date(dateString);
   const today = new Date();
   
-  // Check if it's the same day
   const isToday = date.getDate() === today.getDate() &&
                   date.getMonth() === today.getMonth() &&
                   date.getFullYear() === today.getFullYear();
@@ -132,7 +134,6 @@ const googleService = {
       return json;
     } catch (e) {
       console.error("Google Sheet Fetch Error:", e);
-      // Helpful error message specifically for the "Failed to fetch" CORS/Permission issue
       if (e.message === 'Failed to fetch') {
         throw new Error("Access Denied. Please ensure your Google Script Deployment is set to 'Who has access: Anyone'.");
       }
@@ -197,7 +198,7 @@ const SyncIndicator = ({ status }) => {
     return (
       <div className="flex items-center gap-2 text-blue-300 bg-blue-900/50 px-3 py-1 rounded-full text-xs font-medium animate-pulse">
         <RefreshCw size={12} className="animate-spin" />
-        Saving...
+        Saving DB...
       </div>
     );
   }
@@ -205,14 +206,14 @@ const SyncIndicator = ({ status }) => {
     return (
       <div className="flex items-center gap-2 text-red-300 bg-red-900/50 px-3 py-1 rounded-full text-xs font-medium">
         <CloudOff size={12} />
-        Sync Error
+        DB Error
       </div>
     );
   }
   return (
     <div className="flex items-center gap-2 text-emerald-300 bg-emerald-900/50 px-3 py-1 rounded-full text-xs font-medium transition-all">
       <Cloud size={12} />
-      Synced
+      DB Synced
     </div>
   );
 };
@@ -230,7 +231,10 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState('idle');
   const [dataSource, setDataSource] = useState('local'); 
   const [lastSaved, setLastSaved] = useState(null);
-   
+  
+  // Reporting Sync State
+  const [reportingStatus, setReportingStatus] = useState('idle'); // idle, syncing, success, error
+
   // Filter States
   const [filters, setFilters] = useState({
     status: 'all',
@@ -253,6 +257,7 @@ export default function App() {
     setLoading(true);
     setErrorMsg(null);
     try {
+      // Always load from the main DB URL (to preserve state)
       const result = apiUrl 
         ? await googleService.getData(apiUrl) 
         : await localService.getData();
@@ -266,7 +271,6 @@ export default function App() {
       setLastSaved(new Date());
     } catch (error) {
       console.error("Failed to load", error);
-      // More descriptive error handling for the UI
       const msg = error.message.includes("Access Denied") 
         ? "Access Denied: Please check your Google Script deployment settings (Who has access: Anyone)." 
         : "Could not fetch data from Cloud. Using local backup.";
@@ -286,11 +290,7 @@ export default function App() {
     setSyncStatus('saving');
     try {
       if (apiUrl) {
-        // Calculate payload size for diagnostics
-        const payloadStr = JSON.stringify(newData);
-        const sizeKb = (payloadStr.length / 1024).toFixed(1);
-        console.log(`Saving ${sizeKb}KB to backend...`);
-         
+        // Save to the original DB URL
         await googleService.saveData(apiUrl, newData);
       } else {
         await localService.saveData(newData);
@@ -304,14 +304,33 @@ export default function App() {
     }
   };
 
+  // --- NEW FEATURE: PUSH TO REPORTING SHEET ---
+  const syncToReportingSheet = async () => {
+    if (!REPORTING_API_URL) return;
+    
+    setReportingStatus('syncing');
+    try {
+      // We send the entire data object. 
+      // The Script on the other end will handle formatting it into the "Primary Data Page".
+      await googleService.saveData(REPORTING_API_URL, data);
+      setReportingStatus('success');
+      
+      // Reset success message after 3 seconds
+      setTimeout(() => setReportingStatus('idle'), 3000);
+    } catch (e) {
+      console.error("Reporting Sync Failed", e);
+      setReportingStatus('error');
+    }
+  };
+
   const forceSave = async () => {
     if (!apiUrl) return alert("No API URL configured");
-    if (!window.confirm("This will force-overwrite the cloud data with your current view. Continue?")) return;
+    if (!window.confirm("This will force-overwrite the cloud database with your current view. Continue?")) return;
      
     setLoading(true);
     await saveDataToBackend(data);
     setLoading(false);
-    alert("Force save command sent. Check Google Sheet for 'Data Chunks'.");
+    alert("Database force save complete.");
   };
 
   const handleCsvUpload = (event) => {
@@ -339,12 +358,11 @@ export default function App() {
      
     facilityRows.forEach(row => {
       const rawWbn = row['wbn'] || 'Unknown';
-      // BUG FIX: Use normalizeWbn for strictly consistent IDs (removes hidden spaces/chars)
       const cleanId = normalizeWbn(rawWbn);
 
       const item = {
         id: cleanId,
-        wbn: cleanCsvWbn(rawWbn), // Keep visual representation readable
+        wbn: cleanCsvWbn(rawWbn),
         bagid: row['bagid'] || '-',
         cl: row['cl'] || 'Unknown Client',
         pdt: row['pdt'] || '-',
@@ -354,8 +372,6 @@ export default function App() {
         rcn: row['rcn'] || '-',
         remark: row['cs_sr'] || '-',
         updatedAt: now,
-        // Important: firstSeenAt will be set to 'now' here, 
-        // but overwritten by existing data if matched below
         firstSeenAt: now, 
         jarvis_ticket: '',
         user_note: '', 
@@ -367,8 +383,6 @@ export default function App() {
     const currentActive = [...data.active];
     const newActiveList = [];
     const resolvedList = [];
-    
-    // Helper to track history items that are being "Reopened"
     const remainingHistory = [];
     
     let newCount = 0;
@@ -376,27 +390,20 @@ export default function App() {
 
     // 1. Process Currently Active Items
     currentActive.forEach(existingItem => {
-      // Normalize the existing ID as well to ensure match even if format differed slightly
       const existingIdNormalized = normalizeWbn(existingItem.wbn || existingItem.id);
 
-      // Check against our new normalized map
       if (incomingDataMap.has(existingIdNormalized)) {
         const incoming = incomingDataMap.get(existingIdNormalized);
-        
         newActiveList.push({
           ...incoming,
-          // CRITICAL: Preserve persistent fields from the existing matched item
           jarvis_ticket: existingItem.jarvis_ticket, 
           user_note: existingItem.user_note || '',    
           firstSeenAt: existingItem.firstSeenAt || existingItem.updatedAt || now, 
           status: 'Pending'
         });
-        
-        // Remove from map so we know it was handled
         incomingDataMap.delete(existingIdNormalized);
         updatedCount++;
       } else {
-        // Item missing from new report -> Resolved
         resolvedList.push({
           ...existingItem,
           resolvedAt: new Date().toISOString(),
@@ -406,30 +413,21 @@ export default function App() {
     });
 
     // 2. Process Resolved History (Checking for Reopens)
-    // We check if any remaining incoming items (that weren't in Active) exist in History
     data.history.forEach(historyItem => {
       const historyIdNormalized = normalizeWbn(historyItem.wbn || historyItem.id);
 
       if (incomingDataMap.has(historyIdNormalized)) {
-        // FOUND IN HISTORY -> REOPEN
         const incoming = incomingDataMap.get(historyIdNormalized);
-        
         newActiveList.push({
           ...incoming,
-          // RESTORE DATA FROM HISTORY
           jarvis_ticket: historyItem.jarvis_ticket || '', 
           user_note: historyItem.user_note || '',
-          // Use original firstSeenAt if available, otherwise keep what we have
           firstSeenAt: historyItem.firstSeenAt || historyItem.updatedAt || now, 
-          status: 'Pending' // Back to active status
+          status: 'Pending'
         });
-
-        // Remove from incoming map
         incomingDataMap.delete(historyIdNormalized);
         updatedCount++;
-        // We DO NOT push this to remainingHistory, effectively removing it from Resolved History
       } else {
-        // Not in incoming, so it stays in history
         remainingHistory.push(historyItem);
       }
     });
@@ -442,7 +440,6 @@ export default function App() {
 
     const newData = {
       active: newActiveList,
-      // History is: Newly Resolved + Old History (minus reopened ones)
       history: [...resolvedList, ...remainingHistory]
     };
 
@@ -563,50 +560,41 @@ export default function App() {
     return result;
   }, [data.active, searchTerm, filters]);
 
-  // --- DOWNLOAD REPORT ---
+  // --- DOWNLOAD CSV REPORT (Backup) ---
   const handleDownloadReport = () => {
-    const reportData = activeTab === 'active' ? filteredActive : data.history;
-     
-    // Headers matching the schema
-    const headers = [
-      "WBN", "Bag ID", "Client", "Product", 
-      "Age (Days)", "Age (Hours)", 
-      "NTC Name", "RCN", "Remark", 
-      "Jarvis Ticket", "User Note", "Status", "First Seen", "Last Updated"
-    ];
+    const allData = [...data.active, ...data.history];
+    const headers = ["STATUS","WBN / BAG ID","CLIENT","PRODUCT","AGEING (DAYS)","ORIGINAL REMARK","JARVIS TICKET","USER NOTE","LAST SYNCED"];
 
     const csvContent = [
       headers.join(','),
-      ...reportData.map(row => [
-        `"${row.wbn}"`,
-        `"${row.bagid}"`,
-        `"${row.cl}"`,
-        `"${row.pdt}"`,
-        row.age_days || 0,
-        row.age_hours || 0,
-        `"${row.ntc_name}"`,
-        `"${row.rcn}"`,
-        `"${(row.remark || '').replace(/"/g, '""')}"`, // Escape quotes
-        `"${row.jarvis_ticket || ''}"`,
-        `"${(row.user_note || '').replace(/"/g, '""')}"`,
-        row.status,
-        row.firstSeenAt || '',
-        row.updatedAt || row.resolvedAt
-      ].join(','))
+      ...allData.map(row => {
+        let finalStatus = row.status || 'Pending';
+        if (row.resolvedAt || row.status === 'Resolved') finalStatus = 'Resolved';
+        return [
+          `"${finalStatus}"`,
+          `"${row.wbn || row.bagid || ''}"`,
+          `"${row.cl || ''}"`,
+          `"${row.pdt || ''}"`,
+          `"${row.age_days || '0'}"`,
+          `"${(row.remark || '').replace(/"/g, '""')}"`,
+          `"${(row.jarvis_ticket || '').replace(/"/g, '""')}"`,
+          `"${(row.user_note || '').replace(/"/g, '""')}"`,
+          `"${new Date().toLocaleString()}"`
+        ].join(',');
+      })
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `return_ageing_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `return_ageing_report_${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // --- RENDER HELPERS ---
   const resetFilters = () => setFilters({ status: 'all', client: 'all', product: 'all', age: 'all' });
 
   const stats = {
@@ -635,15 +623,41 @@ export default function App() {
           </div>
            
           <div className="flex items-center gap-4">
-            <div className="flex flex-col items-end">
+             {/* SYNC INDICATORS */}
+            <div className="flex flex-col items-end gap-1">
                <SyncIndicator status={syncStatus} />
-               {lastSaved && <span className="text-[10px] text-gray-400 mt-1">Last Saved: {lastSaved.toLocaleTimeString()}</span>}
+               {lastSaved && <span className="text-[10px] text-gray-400">Saved: {lastSaved.toLocaleTimeString()}</span>}
             </div>
-            
+
+            {/* SEPARATOR */}
+            <div className="h-8 w-px bg-slate-700 mx-2"></div>
+
+             {/* SYNC REPORT BUTTON (NEW FEATURE) */}
+            <button 
+              onClick={syncToReportingSheet}
+              disabled={reportingStatus === 'syncing'}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-all shadow-sm ${
+                reportingStatus === 'success' ? 'bg-green-600 text-white' :
+                reportingStatus === 'error' ? 'bg-red-600 text-white' :
+                'bg-emerald-600 hover:bg-emerald-500 text-white'
+              }`}
+              title="Push formatted data to the new Reporting Sheet"
+            >
+              {reportingStatus === 'syncing' ? <RefreshCw size={18} className="animate-spin" /> : 
+               reportingStatus === 'success' ? <CheckCircle size={18} /> :
+               <Send size={18} />}
+               
+              {reportingStatus === 'syncing' ? 'Syncing Report...' : 
+               reportingStatus === 'success' ? 'Report Sent!' :
+               reportingStatus === 'error' ? 'Failed' :
+               'Sync to Report Sheet'}
+            </button>
+
+             {/* CSV DOWNLOAD BUTTON */}
              <button 
               onClick={handleDownloadReport}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded-lg transition-colors shadow-sm"
-              title="Download CSV Report"
+              className="bg-slate-700 hover:bg-slate-600 p-2 rounded-lg transition-colors shadow-sm text-slate-300"
+              title="Download CSV Backup"
              >
                <Download size={20} />
              </button>
@@ -1005,4 +1019,4 @@ export default function App() {
       </main>
     </div>
   );
-        }
+      }
